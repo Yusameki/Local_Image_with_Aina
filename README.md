@@ -2,12 +2,14 @@
 
 # 🎨 Local_Image_with_Aina
 
-**SDXL 参数基线 · MOSS-Image 本地部署 · LoRA 炼丹实录**
+**SDXL parameter baselines · MOSS-Image local deployment · LoRA training log**
 
-一台 12 GB 显存的消费级主机，把 5B DiT + 9B 文本编码器跑起来，
-再用自家出图训出一支能用的画风 LoRA。
+One 12 GB consumer GPU, running a 5B DiT plus a 9B text encoder —
+then training a usable style LoRA on images we generated ourselves.
 
-![status](https://img.shields.io/badge/status-实测可复现-2ea44f)
+<sub>**English** · [中文](README.zh-CN.md)</sub>
+
+![status](https://img.shields.io/badge/status-reproduced-2ea44f)
 ![vram](https://img.shields.io/badge/VRAM-12GB-8957e5)
 ![comfyui](https://img.shields.io/badge/ComfyUI-v0.45.2-blue)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
@@ -16,57 +18,60 @@
 
 ---
 
-## 📌 这是什么
+## 📌 What this is
 
-一份「不是教程，是记录」的实战笔记。
+Not a tutorial — a field log.
 
-网上关于 MOSS-Image 的资料，大多停在「装好插件、点一下」。
-但真到自己动手，会遇到一串没人写的东西：插件其实要求新内核、
-`--lowvram` 在默认状态下根本是空操作、量化文件的格式名和文件名对不上……
+Most write-ups about MOSS-Image stop at "install the plugin, hit queue."
+The moment you actually try it, you hit a pile of things nobody wrote down:
+the plugin quietly requires a newer core, `--lowvram` is a no-op in the
+default configuration, the quantization format recorded inside the file
+doesn't match the filename…
 
-这个仓库把从零跑通的全过程摊开写：
-**踩了什么坑、怎么验的、最后哪一档参数最好、为什么。**
+This repo lays the whole path open: **what broke, how we verified it,
+which setting finally won, and why.**
 
-> **Project_Aina 的第一步。**
-> 这套「本地化工作流」接下来会继续往 **动画、音乐、游戏** 方向长——
-> 先把图这一层彻底摸透、摸到能复现，再往下一个模态走。
+> **The first step of Project_Aina.**
+> This local-first workflow will keep growing toward **animation, music, and games** —
+> get the image layer fully mapped and reproducible first, then move on to the next modality.
 
 ---
 
-## 🏆 两个核心结论
+## 🏆 Two core results
 
 <table>
 <tr>
 <td width="50%" valign="top">
 
-### ① 12 GB 跑得动 5B DiT
+### ① 12 GB is enough for a 5B DiT
 
-| 项 | 实测值 |
+| Item | Measured |
 |---|---|
-| 分辨率 | `832 × 1808` |
-| 采样 | 50 步 / CFG 3 / euler + sgm_uniform |
-| 单张耗时 | **52–60 秒** |
-| 显存峰值 | **11.1 GB** / 12.3 GB |
+| Resolution | `832 × 1808` |
+| Sampling | 50 steps / CFG 3 / euler + sgm_uniform |
+| Per image | **52–60 s** |
+| VRAM peak | **11.1 GB** / 12.3 GB |
 
-关键是**分时**而不是**降级**：
-int8 DiT 与 w4a8 文本编码器不同时驻留，编码器跑完立刻释放。
+The trick is **time-sharing, not downgrading**:
+the int8 DiT and the w4a8 text encoder never reside together —
+the encoder is released the moment it finishes.
 
 </td>
 <td width="50%" valign="top">
 
-### ② LoRA 的甜点区是 300 步
+### ② The LoRA sweet spot is 300 steps
 
-10 个 checkpoint × 3 档强度 × 2 场景 × 3 种子 = **180 张**对比图，
-按 18 条长廊逐组盲选：
+10 checkpoints × 3 strengths × 2 scenes × 3 seeds = **180 images**,
+laid out as 18 strips and picked blind, one group at a time:
 
 ```
-300 步  ██████████████  14/18  ← 甜点
-1000 步 ██               2/18
-200 步  █                 1/18
-700 步  █                 1/18
+300 steps  ██████████████  14/18  ← sweet spot
+1000 steps ██               2/18
+200 steps  █                 1/18
+700 steps  █                 1/18
 ```
 
-**300 步 + 亮场景 0.8 / 暗场景 1.0** 是最终配方。
+**300 steps + 0.8 in bright scenes / 1.0 in dark scenes** is the final recipe.
 
 </td>
 </tr>
@@ -74,110 +79,112 @@ int8 DiT 与 w4a8 文本编码器不同时驻留，编码器跑完立刻释放�
 
 ---
 
-## 🖼 效果
+## 🖼 Results
 
 <div align="center">
 
-| SDXL 基线（768×1664） | MOSS + 300 步 LoRA · 亮场景 |
+| SDXL baseline (768×1664) | MOSS + 300-step LoRA · bright |
 |---|---|
 | ![sdxl](assets/preview-01-sdxl.jpg) | ![seaside](assets/preview-02-seaside.jpg) |
 
-| 纯 base 水彩（无 LoRA） | MOSS + 300 步 LoRA · 暗场景 |
+| Pure base watercolor (no LoRA) | MOSS + 300-step LoRA · dark |
 |---|---|
 | ![watercolor](assets/preview-03-watercolor.jpg) | ![dark](assets/preview-04-dark.jpg) |
 
 </div>
 
-四张图分别对应链路里的四个位置：
-SDXL 基线 → MOSS 亮场景 → 纯 base 水彩线 → MOSS 暗场景。
+The four images map onto four positions in the pipeline:
+SDXL baseline → MOSS bright → pure-base watercolor branch → MOSS dark.
 
 ---
 
-## 🧭 整体链路
+## 🧭 The pipeline
 
 ```
         ┌─────────────────────────────────────────────┐
-        │            SDXL 栈（画风 & 数据来源）         │
-        │  底模 + 画风 LoRA + 人物质感 LoRA             │
-        │  CFG 5.0 · euler_ancestral · 28 步 · 768×1664│
+        │       SDXL stack (style & data source)       │
+        │  base model + style LoRA + character LoRA    │
+        │  CFG 5.0 · euler_ancestral · 28 steps        │
         └──────────────────┬──────────────────────────┘
-                           │  70 张精选出图
-                           │  （Synthetic Data）
+                           │  70 hand-picked outputs
+                           │  (synthetic data)
                            ▼
         ┌─────────────────────────────────────────────┐
-        │         打标：只写内容，不写风格              │
-        │  [画风触发词] + [主体/人数/景别/场景描述]      │
-        └──────────────────┬──────────────────────────┘
-                           │
-                           ▼
-        ┌─────────────────────────────────────────────┐
-        │   KohakuMossTrainer · vram_12g 档            │
-        │   1000 步 · 3.4 s/step · 58 min · 峰值 4.7G  │
-        └──────────────────┬──────────────────────────┘
-                           │  10 个 checkpoint
-                           ▼
-        ┌─────────────────────────────────────────────┐
-        │      180 张矩阵 · 种子统一 · 18 组盲选        │
-        │      → 300 步胜出（14/18）                    │
+        │     Captioning: content only, no style       │
+        │  [style trigger] + [subject/count/shot/scene]│
         └──────────────────┬──────────────────────────┘
                            │
                            ▼
         ┌─────────────────────────────────────────────┐
-        │      MOSS 栈（出图）                         │
+        │   KohakuMossTrainer · vram_12g profile       │
+        │   1000 steps · 3.4 s/step · 58 min · 4.7 GB  │
+        └──────────────────┬──────────────────────────┘
+                           │  10 checkpoints
+                           ▼
+        ┌─────────────────────────────────────────────┐
+        │  180-image matrix · fixed seeds · 18 strips  │
+        │  → 300 steps wins (14/18)                    │
+        └──────────────────┬──────────────────────────┘
+                           │
+                           ▼
+        ┌─────────────────────────────────────────────┐
+        │      MOSS stack (inference)                  │
         │  int8 DiT + w4a8 TE + flux2-vae-small        │
-        │  50 步 · CFG 3 · shift 5 · 832×1808          │
+        │  50 steps · CFG 3 · shift 5 · 832×1808       │
         └─────────────────────────────────────────────┘
 ```
 
-> 这条链路里，**具体提示词与工作流 JSON 不在本仓库范围内**。
-> 这里给的是结构与方法：什么参数决定什么、什么该交给 LoRA、什么该写进 caption。
+> **No concrete prompts or ComfyUI workflow JSON live in this repo.**
+> What's here is structure and method: which parameter does what,
+> what belongs in the LoRA, what belongs in the caption.
 
 ---
 
-## 📂 仓库结构
+## 📂 Layout
 
 ```
 .
-├── README.md                      # 你在这里
+├── README.md                      # you are here
+├── README.zh-CN.md                # 中文版
 ├── docs/
-│   ├── 01_sdxl-params.md          # SDXL 参数基线（只有参数与逻辑）
-│   ├── 02_moss-deployment.md      # MOSS 本地部署踩坑记
-│   └── 03_moss-lora-training.md   # LoRA 炼丹实录（重头戏）
+│   ├── 01_sdxl-params.md          # SDXL parameter baseline (numbers and reasoning only)
+│   ├── 02_moss-deployment.md      # MOSS deployment, failure by failure
+│   └── 03_moss-lora-training.md   # LoRA training log (the main course)
 ├── scripts/
-│   ├── bench-llamacpp.mjs         # OpenAI 兼容端点流式测速
-│   ├── moss-matrix-batch.py       # 批量跑参数矩阵 + 拼对照表
-│   └── yolo-hand-check.py         # 手部检测防崩筛查
-└── assets/                        # 效果图
+│   ├── bench-llamacpp.mjs         # streaming benchmark for OpenAI-compatible endpoints
+│   ├── moss-matrix-batch.py       # batch parameter matrix + contact sheets
+│   └── yolo-hand-check.py         # hand-detection screening before training
+└── assets/                        # previews
 ```
 
 ---
 
-## 🚀 快速开始
+## 🚀 Quick start
 
-### 跑 MOSS-Image
+### Running MOSS-Image
 
 ```bash
-# 1. 拿一份新内核（≥ v0.42.4，实测 v0.45.2）
+# 1. Grab a newer core (>= v0.42.4; v0.45.2 verified here)
 git clone https://github.com/Comfy-Org/ComfyUI.git ComfyUI-MOSS
 cd ComfyUI-MOSS && git checkout v0.45.2
 
-# 2. 复用现有 torch，建一个不污染原环境的 venv
+# 2. Reuse the existing torch in a venv that doesn't pollute the original env
 python -m venv --system-site-packages .venv
 ./.venv/Scripts/python.exe -m pip install -r requirements.txt
 
-# 3. 下三个文件（约 12 GB），丢进对应目录
+# 3. Fetch three files (~12 GB) into the matching folders
 #    diffusion_models/moss_image_base_int8_convrot.safetensors
 #    text_encoders/qwen3.5_9b_w4a8_gptq.safetensors
 #    vae/flux2-vae_small.safetensors
 
-# 4. 启动（不需要任何显存开关，它们都是空操作）
+# 4. Launch (no VRAM flags needed — they're all no-ops)
 python main.py --port 8189 --use-sage-attention --cuda-malloc
 ```
 
-节点链：`UNETLoader → CLIPLoader(type=moss_image) → VAELoader → KSampler`。
-详见 [`docs/02_moss-deployment.md`](docs/02_moss-deployment.md)。
+Node chain: `UNETLoader → CLIPLoader(type=moss_image) → VAELoader → KSampler`.
+Details in [`docs/02_moss-deployment.md`](docs/02_moss-deployment.md).
 
-### 跑参数矩阵
+### Running the parameter matrix
 
 ```bash
 python scripts/moss-matrix-batch.py \
@@ -191,49 +198,50 @@ python scripts/moss-matrix-batch.py \
 
 ---
 
-## 🕳 踩坑速查
+## 🕳 Pitfall cheat sheet
 
 <details>
-<summary><b>展开：7 个花掉最多时间的坑</b></summary>
+<summary><b>Expand: the 7 traps that cost the most time</b></summary>
 
 <br>
 
-| 坑 | 真相 |
+| Trap | What's actually true |
 |---|---|
-| 社区 MOSS 节点 | `manaigc/comfyui-moss-Image` **仓库不存在**；其余全是附加功能，没有一个是内核兼容层 |
-| 官方插件 | 它自己 `import comfy.storage`，**老内核上直接 ImportError** → 装插件 ≈ 升级内核 |
-| `--lowvram` | 翻开源码才发现：`Doesn't do anything if dynamic vram is enabled`，而 N 卡默认开着 |
-| `--normalvram` | 这个参数**根本不存在**，报 unrecognized arguments |
-| 量化文件名 | 名字写 `gptq`，文件里记的却是 `asym_w4a8_int8`，要读 `.comfy_quant` 才知道 |
-| `KEEP_LAST` | 默认 3，跑 1000 步只留最后 3 个 checkpoint，中间全被删掉 |
-| `warmup >= STEPS` | 跑 100 步验证时会直接被拒，要整体覆盖 SCHEDULE |
+| Community MOSS nodes | `manaigc/comfyui-moss-Image` **does not exist**; the rest are add-ons, none is a compatibility shim |
+| The official plugin | It imports `comfy.storage` itself, so it **ImportErrors on an old core** — installing the plugin is upgrading the core |
+| `--lowvram` | The source says it plainly: `Doesn't do anything if dynamic vram is enabled` — and NVIDIA enables it by default |
+| `--normalvram` | **Doesn't exist at all**; you get `unrecognized arguments` |
+| Quantization filenames | The name says `gptq`, the file records `asym_w4a8_int8` — only `.comfy_quant` tells the truth |
+| `KEEP_LAST` | Defaults to 3, so a 1000-step run keeps only the last 3 checkpoints and deletes the rest |
+| `warmup >= STEPS` | A 100-step smoke test is rejected outright; override SCHEDULE as a whole |
 
 </details>
 
 ---
 
-## 📚 三份文档怎么读
+## 📚 Reading the three docs
 
-| 文档 | 适合谁 | 核心内容 |
+| Doc | For whom | Core content |
 |---|---|---|
-| [SDXL 参数基线](docs/01_sdxl-params.md) | 想复现基线参数 | 参数表、为什么是这几个数、CFG 不能跨架构套用 |
-| [MOSS 部署](docs/02_moss-deployment.md) | 想在自己机器上跑 | 版本门槛、量化校验、显存分时 |
-| [LoRA 炼丹](docs/03_moss-lora-training.md) | 想训自己的画风 | Synthetic Data、打标哲学、矩阵盲选、三个反直觉发现 |
+| [SDXL parameter baseline](docs/01_sdxl-params.md) | Reproducing the baseline | Parameter tables, why these numbers, why CFG doesn't transfer across architectures |
+| [MOSS deployment](docs/02_moss-deployment.md) | Running it on your own box | Version thresholds, quantization checks, VRAM time-sharing |
+| [LoRA training](docs/03_moss-lora-training.md) | Training your own style | Synthetic data, captioning philosophy, blind matrix selection, three counter-intuitive findings |
 
 ---
 
-## 💡 最后一句
+## 💡 One last thing
 
-> **参数是死的，眼睛是活的。**
+> **Parameters are dead; eyes are alive.**
 
-这一轮最贵的教训，不是哪个参数没调对，
-而是两次「指标说得通、但图不好看」被眼睛纠正。
-指标用来筛异常，判断交给眼睛。
+The most expensive lesson of this round wasn't a mis-set parameter.
+It was being corrected twice by a human eye — twice when the metrics
+said everything was fine and the picture said otherwise.
+Use metrics to catch anomalies. Leave the judgement to your eyes.
 
 <div align="center">
 
 ---
 
-Made with too many late nights and 180 张对比图 (´-ω-`)ﾉ
+Made with too many late nights and 180 comparison images (´-ω-`)ﾉ
 
 </div>
